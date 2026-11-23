@@ -34,7 +34,7 @@ Requirements: Hyprland with the Lua config (0.55+), OBS ≥ 30 (obs-websocket bu
 ```sh
 hfs up        # first run: pick DP-1 in the portal dialog and tick "allow restore token"
 # share screen "HFS" in your meeting app
-hfs down
+hfs down      # --keep-profile leaves OBS on the hfs profile/collection
 ```
 
 | Command | Effect |
@@ -51,8 +51,25 @@ hfs down
 Include `hyprland/hfs-keybinds.lua` from your Hyprland Lua config:
 
 ```lua
-dofile(os.getenv("HOME") .. "/github_repo/hypr-follow-share/hyprland/hfs-keybinds.lua")
+pcall(dofile, os.getenv("HOME") .. "/github_repo/hypr-follow-share/hyprland/hfs-keybinds.lua")
 ```
+
+`SUPER+ALT+Y` enters the `hfs` submap and shows a cheat-sheet notification. Then:
+
+| Key | Action | Submap after |
+|---|---|---|
+| `=` / `-` (also keypad `+` / `-`) | zoom in / out, repeats while held | stays |
+| `0` | zoom reset (full height, follow on) | stays |
+| `C` | center on cursor | stays |
+| `F` | follow toggle | exits |
+| `M` | mode toggle (deadzone / center) | exits |
+| `S` | select region (slurp) | exits |
+| `U` / `D` | `hfs up --notify` / `hfs down --notify` | exits |
+| `Esc`, `Return`, `SUPER+ALT+Y` | leave | exits |
+
+`--notify` reports the result of `up` / `down` as a desktop notification, since a keybind has no terminal.
+
+Testing binds from a script: use `ydotool` (kernel uinput). `wtype` key presses do not trigger Hyprland binds here, and they drop you out of the submap.
 
 ## Config
 

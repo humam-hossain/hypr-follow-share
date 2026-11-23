@@ -1,0 +1,64 @@
+-- hypr-follow-share keybinds (Hyprland Lua config).
+--
+-- SUPER+ALT+Y enters the "hfs" submap. Inside it:
+--   =  / -     zoom in / out      (stays in the submap, so you can tap repeatedly)
+--   0          zoom reset         (full height, follow on; stays)
+--   C          center on cursor   (stays)
+--   F          follow toggle      (exits)
+--   M          mode toggle        (deadzone <-> center; exits)
+--   S          select region      (slurp; exits)
+--   U / D      hfs up / hfs down  (exits)
+--   Esc, Return, SUPER+ALT+Y      exit
+--
+-- Include from your Hyprland config:
+--   pcall(dofile, os.getenv("HOME") .. "/github_repo/hypr-follow-share/hyprland/hfs-keybinds.lua")
+
+local HOME = os.getenv("HOME")
+local HFS = HOME .. "/.local/bin/hfs"
+local SUBMAP = "hfs"
+
+-- Cheat sheet shown on entry. Same synchronous hint as the daemon, so hfs
+-- notifications replace each other instead of stacking.
+local HELP_CMD = "notify-send -a hfs -t 3000 -h string:x-canonical-private-synchronous:hfs "
+    .. "'Screen share keys' '= / -  zoom    0  reset    C  center\n"
+    .. "F  follow    M  mode    S  select\n"
+    .. "U  up    D  down    Esc  exit'"
+
+local function run(args)
+    return hl.dsp.exec_cmd(HFS .. " " .. args)
+end
+
+-- Run a command, then leave the submap.
+local function run_and_exit(cmd)
+    return function()
+        hl.dispatch(hl.dsp.exec_cmd(cmd))
+        hl.dispatch(hl.dsp.submap("reset"))
+    end
+end
+
+hl.bind("SUPER + ALT + Y", function()
+    hl.dispatch(hl.dsp.exec_cmd(HELP_CMD))
+    hl.dispatch(hl.dsp.submap(SUBMAP))
+end, { description = "Screen share (hfs): enter control mode" })
+
+hl.define_submap(SUBMAP, function()
+    -- Repeatable: stay in the submap.
+    hl.bind("equal", run("zoom in"), { repeating = true, description = "hfs: zoom in" })
+    hl.bind("KP_Add", run("zoom in"), { repeating = true })
+    hl.bind("minus", run("zoom out"), { repeating = true, description = "hfs: zoom out" })
+    hl.bind("KP_Subtract", run("zoom out"), { repeating = true })
+    hl.bind("0", run("zoom reset"), { description = "hfs: zoom reset (full height, follow on)" })
+    hl.bind("C", run("center"), { description = "hfs: center on cursor" })
+
+    -- One-shot: act, then exit.
+    hl.bind("F", run_and_exit(HFS .. " follow toggle"), { description = "hfs: follow toggle" })
+    hl.bind("M", run_and_exit(HFS .. " mode toggle"), { description = "hfs: mode toggle" })
+    hl.bind("S", run_and_exit(HFS .. " select"), { description = "hfs: select region" })
+    hl.bind("U", run_and_exit(HFS .. " up --notify"), { description = "hfs: up" })
+    hl.bind("D", run_and_exit(HFS .. " down --notify"), { description = "hfs: down" })
+
+    -- Exit.
+    for _, key in ipairs({ "Escape", "Return", "SUPER + ALT + Y" }) do
+        hl.bind(key, hl.dsp.submap("reset"))
+    end
+end)

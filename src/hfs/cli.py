@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import subprocess
 import sys
@@ -10,8 +11,9 @@ import sys
 from . import config, setup
 
 USAGE = """\
-hfs up                       start OBS scene, virtual monitor, projector and follow daemon
-hfs down [--keep-profile]    tear everything down (restores your previous OBS profile/collection)
+hfs up [--notify]            start OBS scene, virtual monitor, projector and follow daemon
+hfs down [--keep-profile] [--notify]
+                             tear everything down (restores your previous OBS profile/collection)
 hfs follow [on|off|toggle]   cursor follow
 hfs mode [deadzone|center|toggle]
 hfs zoom in|out|reset        shrink/grow the shared region (reset = full height, follow on)
@@ -30,12 +32,17 @@ def main(argv: list[str] | None = None) -> None:
     cfg = config.load()
     cmd, args = argv[0], argv[1:]
 
-    if cmd == "up":
-        setup.up(cfg)
-    elif cmd == "down":
-        p = argparse.ArgumentParser(prog="hfs down")
-        p.add_argument("--keep-profile", action="store_true")
-        setup.down(cfg, restore=not p.parse_args(args).keep_profile)
+    if cmd in ("up", "down"):
+        p = argparse.ArgumentParser(prog=f"hfs {cmd}")
+        p.add_argument("--notify", action="store_true", help="desktop notification with the result (for keybinds)")
+        if cmd == "down":
+            p.add_argument("--keep-profile", action="store_true")
+        opts = p.parse_args(args)
+        with _notifying(opts.notify, cmd):
+            if cmd == "up":
+                setup.up(cfg)
+            else:
+                setup.down(cfg, restore=not opts.keep_profile)
     elif cmd == "daemon":
         from . import daemon
         daemon.main(cfg)
@@ -49,6 +56,32 @@ def main(argv: list[str] | None = None) -> None:
     else:
         print(USAGE, end="", file=sys.stderr)
         sys.exit(2)
+
+
+def _notify(title: str, body: str, urgent: bool = False) -> None:
+    subprocess.run(
+        ["notify-send", "-a", "hfs", "-t", "4000", "-u", "critical" if urgent else "normal",
+         "-h", "string:x-canonical-private-synchronous:hfs", title, body],
+        check=False,
+    )
+
+
+@contextlib.contextmanager
+def _notifying(enabled: bool, cmd: str):
+    if not enabled:
+        yield
+        return
+    _notify("Screen share", "Starting..." if cmd == "up" else "Stopping...")
+    try:
+        yield
+    except SystemExit as e:
+        if e.code not in (None, 0):
+            _notify(f"hfs {cmd} failed", str(e.code), urgent=True)
+        raise
+    except Exception as e:
+        _notify(f"hfs {cmd} failed", f"{type(e).__name__}: {e}", urgent=True)
+        raise
+    _notify("Screen share", 'Ready. Share screen "HFS".' if cmd == "up" else "Stopped.")
 
 
 def _print(resp: dict | None) -> None:
