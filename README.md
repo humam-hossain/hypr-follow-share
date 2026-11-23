@@ -18,7 +18,7 @@ Discord / Meet / Zoom --share screen--> "HFS"
 - Panning uses sub-pixel scene item position/scale, not integer crop values, so motion is smooth.
 - The **deadzone** mode keeps the view still while the cursor stays in the middle. The view moves only when the cursor nears an edge. The **center** mode keeps the cursor centered.
 - OBS global hotkeys don't work on Wayland, so all controls go through `hfs` CLI commands bound in Hyprland.
-- `hfs up` switches OBS to its own `hfs` profile and scene collection (2560x1440 @ 60 canvas). `hfs down` switches back to the ones you had before.
+- `hfs up` puts OBS on its own `hfs` profile and scene collection (2560x1440 @ 60 canvas). If OBS isn't running, hfs starts it straight on `hfs`, and `hfs down` quits it again. OBS will open your usual profile/collection the next time you start it yourself. Your collection is not loaded on stop, so its screen captures and scripts don't start up. If OBS was already open, `hfs down` switches it back to what you had.
 - The headless monitor sits at `-2560x-5000`, away from every real monitor, so the mouse can never wander onto it and your real monitor layout stays the same.
 
 ## Install
@@ -34,7 +34,7 @@ Requirements: Hyprland with the Lua config (0.55+), OBS ≥ 30 (obs-websocket bu
 ```sh
 hfs up        # first run: pick DP-1 in the portal dialog and tick "allow restore token"
 # share screen "HFS" in your meeting app
-hfs down      # --keep-profile leaves OBS on the hfs profile/collection
+hfs down      # --keep-profile leaves OBS running on the hfs profile/collection (faster next `up`)
 ```
 
 | Command | Effect |

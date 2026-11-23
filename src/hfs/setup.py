@@ -5,10 +5,12 @@ from __future__ import annotations
 import json
 import os
 import re
+import signal
 import socket
 import subprocess
 import sys
 import time
+from pathlib import Path
 
 from . import hypr
 from .config import CONTROL_SOCKET, STATE_DIR, Config
@@ -19,7 +21,9 @@ PROJECTOR_TITLE_RE = r"^(Windowed )?Projector"  # OBS <33: "Windowed Projector (
 OBS_CLASS = "com.obsproject.Studio"
 CAPTURE_KINDS = ("pipewire-screen-capture-source", "pipewire-desktop-capture-source")
 PREVIOUS = STATE_DIR / "previous.json"
+OBS_LAUNCHED = STATE_DIR / "obs-launched"  # pid of an OBS that `hfs up` started
 OBS_BASIC = OBS_WS_CONFIG.parents[2] / "basic"
+OBS_USER_INI = OBS_BASIC.parent / "user.ini"  # OBS 31+; older versions use global.ini
 
 
 def say(msg: str) -> None:
@@ -71,8 +75,19 @@ def connect_obs(launch: bool = True, cfg: Config | None = None) -> OBS:
         cmd += ["--collection", cfg.collection]
     if cfg and (OBS_BASIC / "profiles" / cfg.profile).is_dir():
         cmd += ["--profile", cfg.profile]
-    subprocess.Popen(cmd,
-                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    # Remember what OBS would normally open, so `hfs down` can hand it back.
+    basic, prev = _ini_basic(), {}
+    if cfg and basic.get("Profile", cfg.profile) != cfg.profile:
+        prev["profile"] = basic["Profile"]
+    if cfg and basic.get("SceneCollection", cfg.collection) != cfg.collection:
+        prev["collection"] = basic["SceneCollection"]
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    PREVIOUS.unlink(missing_ok=True)
+    if prev:
+        PREVIOUS.write_text(json.dumps(prev))
+    proc = subprocess.Popen(cmd,
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    OBS_LAUNCHED.write_text(str(proc.pid))
     for _ in range(60):
         time.sleep(0.5)
         try:
@@ -102,7 +117,112 @@ def ensure_profile_collection(obs: OBS, cfg: Config) -> None:
         say(f"OBS scene collection -> {cfg.collection}")
     if prev:
         STATE_DIR.mkdir(parents=True, exist_ok=True)
+        try:
+            # Keep what connect_obs saved when it launched OBS; fill in the rest.
+            prev = {**prev, **json.loads(PREVIOUS.read_text())}
+        except (OSError, ValueError):
+            pass
         PREVIOUS.write_text(json.dumps(prev))
+
+
+# OBS keeps the last-used profile/collection in user.ini [Basic].
+_BASIC_KEYS = ("Profile", "ProfileDir", "SceneCollection", "SceneCollectionFile")
+
+
+def _user_ini() -> Path:
+    return OBS_USER_INI if OBS_USER_INI.exists() else OBS_BASIC.parent / "global.ini"
+
+
+def _ini_basic() -> dict[str, str]:
+    out, section = {}, ""
+    try:
+        lines = _user_ini().read_text().splitlines()
+    except OSError:
+        return out
+    for line in lines:
+        if line.startswith("["):
+            section = line.strip()
+        elif section == "[Basic]" and "=" in line:
+            k, v = line.split("=", 1)
+            out[k.strip()] = v.strip()
+    return out
+
+
+def _profile_dir(name: str) -> str:
+    for ini in (OBS_BASIC / "profiles").glob("*/basic.ini"):
+        try:
+            if f"Name={name}" in ini.read_text().splitlines():
+                return ini.parent.name
+        except OSError:
+            continue
+    return name
+
+
+def _collection_file(name: str) -> str:
+    for f in (OBS_BASIC / "scenes").glob("*.json"):
+        try:
+            if json.loads(f.read_text()).get("name") == name:
+                return f.name
+        except (OSError, ValueError):
+            continue
+    return f"{name}.json"
+
+
+def write_startup_selection(prev: dict) -> None:
+    """Make OBS open `prev`'s profile/collection on its next launch, without loading them now."""
+    want = {}
+    if "profile" in prev:
+        want |= {"Profile": prev["profile"], "ProfileDir": _profile_dir(prev["profile"])}
+    if "collection" in prev:
+        want |= {"SceneCollection": prev["collection"],
+                 "SceneCollectionFile": _collection_file(prev["collection"])}
+    if not want:
+        return
+    path = _user_ini()
+    lines = path.read_text().splitlines() if path.exists() else []
+    section, seen, out = "", set(), []
+    for line in lines:
+        if line.startswith("["):
+            if section == "[Basic]":
+                out += [f"{k}={v}" for k, v in want.items() if k not in seen]
+                seen |= set(want)
+            section = line.strip()
+        elif section == "[Basic]" and "=" in line and line.split("=", 1)[0].strip() in want:
+            k = line.split("=", 1)[0].strip()
+            line = f"{k}={want[k]}"
+            seen.add(k)
+        out.append(line)
+    if section == "[Basic]":
+        out += [f"{k}={v}" for k, v in want.items() if k not in seen]
+    elif not seen:
+        out += ["", "[Basic]"] + [f"{k}={v}" for k, v in want.items()]
+    path.write_text("\n".join(out) + "\n")
+
+
+def launched_obs_pid() -> int | None:
+    """Pid of the OBS that `hfs up` started, if it is still running."""
+    try:
+        pid = int(OBS_LAUNCHED.read_text())
+        if Path(f"/proc/{pid}/comm").read_text().strip() == "obs":
+            return pid
+    except (OSError, ValueError):
+        pass
+    OBS_LAUNCHED.unlink(missing_ok=True)
+    return None
+
+
+def quit_obs(pid: int, timeout: float = 15) -> bool:
+    """SIGTERM makes OBS close cleanly (no safe-mode prompt next start)."""
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return True
+    end = time.monotonic() + timeout
+    while time.monotonic() < end:
+        if not Path(f"/proc/{pid}").exists():
+            return True
+        time.sleep(0.2)
+    return False
 
 
 def ensure_video(obs: OBS, cfg: Config, w: int, h: int) -> None:
@@ -256,8 +376,25 @@ def down(cfg: Config, restore: bool = True) -> None:
     if headless_ok(cfg, 0, 0) is not None:
         hypr.hyprctl("output", "remove", cfg.headless_name)
         say(f"removed virtual monitor {cfg.headless_name}")
-    if restore and PREVIOUS.exists():
+    prev = {}
+    try:
         prev = json.loads(PREVIOUS.read_text())
+    except (OSError, ValueError):
+        pass
+    pid = launched_obs_pid()
+    if pid and restore:
+        # hfs started this OBS: quit it rather than switching it back live, which would
+        # restart your own collection's screen captures and scripts right after stopping.
+        if quit_obs(pid):
+            say("OBS closed")
+            write_startup_selection(prev)
+            if prev:
+                say(f"OBS will open {prev} next time")
+            OBS_LAUNCHED.unlink(missing_ok=True)
+            PREVIOUS.unlink(missing_ok=True)
+        else:
+            say(f"OBS (pid {pid}) did not close within 15 s")
+    elif restore and prev:
         try:
             with connect_obs(launch=False) as obs:
                 if "collection" in prev:
