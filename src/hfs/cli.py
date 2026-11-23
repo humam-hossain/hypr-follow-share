@@ -9,6 +9,7 @@ import subprocess
 import sys
 
 from . import config, setup
+from . import notify as notifications
 
 USAGE = """\
 hfs up [--notify]            start OBS scene, virtual monitor, projector and follow daemon
@@ -20,6 +21,7 @@ hfs zoom in|out|reset        shrink/grow the shared region (reset = full height,
 hfs select                   drag a region with slurp (follow turns off)
 hfs center                   jump region to the cursor
 hfs status
+hfs keys on|off              notification for entering/leaving the SUPER+ALT+Y key mode
 hfs daemon                   run the follow loop in the foreground
 """
 
@@ -46,10 +48,19 @@ def main(argv: list[str] | None = None) -> None:
     elif cmd == "daemon":
         from . import daemon
         daemon.main(cfg)
+    elif cmd == "keys":
+        if args[:1] == ["off"]:
+            notifications.send("Keys off", timeout_ms=1000, wait=True)
+        else:
+            notifications.send("Keys on", KEYS_HELP, timeout_ms=4000, wait=True)
     elif cmd == "select":
+        if setup.send("status") is None:
+            _print(None)
+        notifications.send("Select region", "Drag a box · Esc cancels", timeout_ms=3000)
         res = subprocess.run(["slurp", "-f", "%x %y %w %h", "-d"], capture_output=True, text=True)
         if res.returncode != 0:
-            return  # cancelled
+            notifications.send("Selection cancelled")
+            return
         _print(setup.send("region", *res.stdout.split()))
     elif cmd in ("follow", "mode", "zoom", "center", "status"):
         _print(setup.send(cmd, *args))
@@ -58,12 +69,13 @@ def main(argv: list[str] | None = None) -> None:
         sys.exit(2)
 
 
+KEYS_HELP = """= / −  zoom   ·   0  reset   ·   C  center
+F  follow   ·   M  mode   ·   S  select
+U  start   ·   D  stop   ·   Esc  exit"""
+
+
 def _notify(title: str, body: str, urgent: bool = False) -> None:
-    subprocess.run(
-        ["notify-send", "-a", "hfs", "-t", "4000", "-u", "critical" if urgent else "normal",
-         "-h", "string:x-canonical-private-synchronous:hfs", title, body],
-        check=False,
-    )
+    notifications.send(title, body, urgent=urgent, timeout_ms=8000 if urgent else 4000, wait=True)
 
 
 @contextlib.contextmanager
@@ -71,7 +83,10 @@ def _notifying(enabled: bool, cmd: str):
     if not enabled:
         yield
         return
-    _notify("Screen share", "Starting..." if cmd == "up" else "Stopping...")
+    if cmd == "up":
+        _notify("Starting…", "OBS · virtual monitor · projector (~10 s)")
+    else:
+        _notify("Stopping…", "")
     try:
         yield
     except SystemExit as e:
@@ -81,12 +96,21 @@ def _notifying(enabled: bool, cmd: str):
     except Exception as e:
         _notify(f"hfs {cmd} failed", f"{type(e).__name__}: {e}", urgent=True)
         raise
-    _notify("Screen share", 'Ready. Share screen "HFS".' if cmd == "up" else "Stopped.")
+    if cmd == "up":
+        _notify("Ready to share", 'In Discord / Meet / Zoom share the screen "HFS"')
+    else:
+        _notify("Stopped", "")
 
 
 def _print(resp: dict | None) -> None:
+    # Keybinds have no terminal: report errors as notifications too.
+    interactive = sys.stdout.isatty()
     if resp is None:
+        if not interactive:
+            _notify("Screen share is off", "SUPER+ALT+Y then U to start", urgent=True)
         sys.exit("hfs: daemon not running (run `hfs up`)")
     if not resp.get("ok"):
+        if not interactive:
+            _notify("hfs error", str(resp.get("error")), urgent=True)
         sys.exit(f"hfs: {resp.get('error')}")
     print(json.dumps(resp))

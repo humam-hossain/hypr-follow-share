@@ -67,7 +67,7 @@ pcall(dofile, os.getenv("HOME") .. "/github_repo/hypr-follow-share/hyprland/hfs-
 | `U` / `D` | `hfs up --notify` / `hfs down --notify` | exits |
 | `Esc`, `Return`, `SUPER+ALT+Y` | leave | exits |
 
-`--notify` reports the result of `up` / `down` as a desktop notification, since a keybind has no terminal.
+Every key shows a "Screen share" notification with the hfs icon: the new zoom level and crop size, follow on/off, mode, region, start/stop progress, and errors such as "Screen share is off". Popups replace each other while one is still showing, so holding `=` updates one popup. They are transient, so they don't fill the notification center. The icon (`src/hfs/icon.svg`) is installed to `~/.local/share/icons/hicolor/` on first use and sent as an `image-path` hint.
 
 Testing binds from a script: use `ydotool` (kernel uinput). `wtype` key presses do not trigger Hyprland binds here, and they drop you out of the submap.
 

@@ -17,13 +17,8 @@ local HOME = os.getenv("HOME")
 local HFS = HOME .. "/.local/bin/hfs"
 local SUBMAP = "hfs"
 
--- Cheat sheet shown on entry. Same synchronous hint as the daemon, so hfs
--- notifications replace each other instead of stacking.
-local HELP_CMD = "notify-send -a hfs -t 3000 -h string:x-canonical-private-synchronous:hfs "
-    .. "'Screen share keys' '= / -  zoom    0  reset    C  center\n"
-    .. "F  follow    M  mode    S  select\n"
-    .. "U  up    D  down    Esc  exit'"
-
+-- Every action shows a "Screen share" notification with the hfs icon; they replace
+-- each other instead of stacking. `hfs keys on|off` covers entering/leaving the mode.
 local function run(args)
     return hl.dsp.exec_cmd(HFS .. " " .. args)
 end
@@ -37,7 +32,7 @@ local function run_and_exit(cmd)
 end
 
 hl.bind("SUPER + ALT + Y", function()
-    hl.dispatch(hl.dsp.exec_cmd(HELP_CMD))
+    hl.dispatch(hl.dsp.exec_cmd(HFS .. " keys on"))
     hl.dispatch(hl.dsp.submap(SUBMAP))
 end, { description = "Screen share (hfs): enter control mode" })
 
@@ -59,6 +54,6 @@ hl.define_submap(SUBMAP, function()
 
     -- Exit.
     for _, key in ipairs({ "Escape", "Return", "SUPER + ALT + Y" }) do
-        hl.bind(key, hl.dsp.submap("reset"))
+        hl.bind(key, run_and_exit(HFS .. " keys off"))
     end
 end)

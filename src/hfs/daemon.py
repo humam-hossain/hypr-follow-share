@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 
 from . import geometry as g
 from . import hypr, setup
+from . import notify as notifications
 from .config import CONTROL_SOCKET, Config
 from .obs import OBS
 
@@ -30,12 +31,9 @@ class State:
     lock: threading.Lock = field(default_factory=threading.Lock)
 
 
-def notify(cfg: Config, msg: str) -> None:
+def notify(cfg: Config, title: str, body: str = "") -> None:
     if cfg.notify:
-        subprocess.Popen(
-            ["notify-send", "-a", "hfs", "-t", "1200", "-h", "string:x-canonical-private-synchronous:hfs", "Screen share", msg],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        )
+        notifications.send(title, body)
 
 
 class Daemon:
@@ -52,10 +50,11 @@ class Daemon:
             arg = args[0] if args else "toggle"
             if cmd == "follow":
                 s.follow = {"on": True, "off": False}.get(arg, not s.follow)
-                notify(cfg, f"Follow {'ON' if s.follow else 'OFF'}")
+                notify(cfg, "Follow ON" if s.follow else "Follow OFF", "" if s.follow else "View frozen in place")
             elif cmd == "mode":
                 s.mode = arg if arg in ("deadzone", "center") else ("center" if s.mode == "deadzone" else "deadzone")
-                notify(cfg, f"Mode: {s.mode}")
+                notify(cfg, f"Mode: {s.mode}",
+                       "Pans when the cursor nears an edge" if s.mode == "deadzone" else "Keeps the cursor centered")
             elif cmd == "zoom":
                 h = s.height or self.info.get("max_h", 0)
                 if arg == "in":
@@ -67,11 +66,13 @@ class Daemon:
                     s.follow = True
                 else:
                     return {"ok": False, "error": "zoom in|out|reset"}
+                self._notify_zoom(arg)
             elif cmd == "region":
                 x, y, w, h = map(float, args[:4])
                 s.region = (x, y, w, h)
             elif cmd == "center":
                 s.recenter = True
+                notify(cfg, "Centered on cursor")
             elif cmd == "status":
                 pass
             elif cmd == "quit":
@@ -79,6 +80,24 @@ class Daemon:
             else:
                 return {"ok": False, "error": f"unknown command {cmd!r}"}
             return {"ok": True, "follow": s.follow, "mode": s.mode, "height": s.height, "paused": s.paused, **self.info}
+
+    def _notify_zoom(self, arg: str) -> None:
+        """Clamp the requested height like the loop does and report the zoom level."""
+        s, cfg = self.state, self.cfg
+        src = self.info.get("source")
+        if not src:
+            notify(cfg, "Zoom", "Capture not ready yet")
+            return
+        max_h = self.info["max_h"]
+        w, h = g.size_for_height(s.height or max_h, src[0], src[1], cfg.aspect, cfg.min_height)
+        s.height = 0 if h >= max_h else h
+        size = f"{w:.0f}×{h:.0f}"
+        if s.height == 0:
+            body = f"Full height · {size}" + (" · follow ON" if arg == "reset" else "")
+            notify(cfg, "Zoom reset" if arg == "reset" else "Zoom 1.00× (widest)", body)
+        else:
+            limit = " (max)" if h <= min(cfg.min_height, max_h) + 0.5 else ""
+            notify(cfg, f"Zoom {max_h / h:.2f}×{limit}", size)
 
     def serve(self) -> None:
         try:
@@ -161,7 +180,7 @@ class Daemon:
                     sel = g.Rect((rx - mon.x) * sx_scale, (ry - mon.y) * sy_scale, rw * sx_scale, rh * sy_scale)
                     target = g.fit_selection(sel, src_w, src_h, cfg.aspect, cfg.min_height)
                     s.height, s.follow = target.h, False
-                    notify(cfg, "Region set, follow OFF")
+                    notify(cfg, f"Region {target.w:.0f}×{target.h:.0f}", "Follow OFF · 0 resets")
                 else:
                     w, h = g.size_for_height(s.height or max_h, src_w, src_h, cfg.aspect, cfg.min_height)
                     s.height = 0 if h >= max_h else h
